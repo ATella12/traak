@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { fetchGammaPublicSearch, type SearchMarketResult } from "@/src/lib/gammaSearch";
+import { fetchGammaPublicSearch, type SearchEventResult } from "@/src/lib/gammaSearch";
 
 type SearchResponse = {
   q: string;
   stale: boolean;
   error?: string;
-  results: SearchMarketResult[];
+  results: SearchEventResult[];
 };
 
 type CachedSearch = {
   expiresAt: number;
-  results: SearchMarketResult[];
+  results: SearchEventResult[];
 };
 
 const CACHE_TTL_MS = 60_000;

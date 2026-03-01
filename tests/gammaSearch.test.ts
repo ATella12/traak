@@ -2,8 +2,21 @@ import {
   buildGammaPublicSearchUrl,
   fetchGammaPublicSearch,
   normalizeGammaPublicSearchResponse,
+  pickPrimaryMarket,
+  type SearchMarketResult,
 } from "@/src/lib/gammaSearch";
 import { describe, expect, it, vi } from "vitest";
+
+const mk = (overrides: Partial<SearchMarketResult> = {}): SearchMarketResult => ({
+  marketId: "m",
+  question: "Will Barca win?",
+  slug: "will-barca-win",
+  active: true,
+  closed: false,
+  outcomes: ["Yes", "No"],
+  outcomePrices: [0.6, 0.4],
+  ...overrides,
+});
 
 describe("gammaSearch client", () => {
   it("builds public-search URL with required and optional params", () => {
@@ -26,48 +39,106 @@ describe("gammaSearch client", () => {
     expect(url.searchParams.get("ascending")).toBe("false");
   });
 
-  it("normalizes events[].markets[] into SearchMarketResult", () => {
+  it("normalizes into event-first results using one primary market per event", () => {
     const results = normalizeGammaPublicSearchResponse({
       events: [
         {
           id: "event-1",
-          title: "UEFA",
-          slug: "uefa",
+          title: "Barcelona vs Real Madrid",
+          slug: "barca-real",
           icon: "https://cdn/icon.png",
           markets: [
             {
-              id: "m1",
-              question: "Will Barca win?",
-              slug: "will-barca-win",
-              conditionId: "0xabc",
-              active: true,
-              closed: false,
-              endDate: "2026-06-10T00:00:00Z",
-              volume: "123.45",
-              liquidityNum: 456.78,
+              id: "m-prop",
+              question: "Map 1 Winner",
+              slug: "map-1-winner",
+              outcomes: "[\"Yes\",\"No\"]",
+              outcomePrices: "[\"0.4\",\"0.6\"]",
+              liquidityNum: 9999,
+            },
+            {
+              id: "m-main",
+              question: "Will Barcelona beat Real Madrid?",
+              slug: "will-barcelona-beat-real-madrid",
+              outcomes: "[\"Yes\",\"No\"]",
+              outcomePrices: "[\"0.6\",\"0.4\"]",
+              liquidityNum: 100,
+              volumeNum: 123.45,
             },
           ],
         },
       ],
     });
 
-    expect(results).toEqual([
-      {
-        marketId: "m1",
-        question: "Will Barca win?",
-        slug: "will-barca-win",
-        conditionId: "0xabc",
-        active: true,
-        closed: false,
-        endDate: "2026-06-10T00:00:00Z",
-        eventId: "event-1",
-        eventTitle: "UEFA",
-        eventSlug: "uefa",
-        eventIcon: "https://cdn/icon.png",
-        volume: 123.45,
-        liquidity: 456.78,
-      },
-    ]);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.eventId).toBe("event-1");
+    expect(results[0]?.primaryMarket.marketId).toBe("m-main");
+    expect(results[0]?.primaryMarket.outcomes).toEqual(["Yes", "No"]);
+    expect(results[0]?.primaryMarket.outcomePrices).toEqual([0.6, 0.4]);
+  });
+
+  it("pickPrimaryMarket prefers Yes/No and excludes derivative markets", () => {
+    const chosen = pickPrimaryMarket({
+      title: "Barcelona vs Real Madrid",
+      markets: [
+        mk({
+          marketId: "prop",
+          question: "Map Handicap: Barcelona -1.5",
+          groupItemTitle: "Map Handicap",
+          liquidity: 10000,
+        }),
+        mk({
+          marketId: "main",
+          question: "Will Barcelona beat Real Madrid?",
+          liquidity: 500,
+        }),
+      ],
+    });
+
+    expect(chosen?.marketId).toBe("main");
+  });
+
+  it("pickPrimaryMarket falls back to best liquidity when no yes/no market exists", () => {
+    const chosen = pickPrimaryMarket({
+      title: "Barcelona vs Real Madrid",
+      markets: [
+        mk({
+          marketId: "a",
+          outcomes: ["Barcelona", "Real Madrid"],
+          outcomePrices: [0.5, 0.5],
+          liquidity: 150,
+        }),
+        mk({
+          marketId: "b",
+          outcomes: ["Barcelona", "Real Madrid"],
+          outcomePrices: [0.4, 0.6],
+          liquidity: 220,
+        }),
+      ],
+    });
+
+    expect(chosen?.marketId).toBe("b");
+  });
+
+  it("pickPrimaryMarket honors derivative keyword exclusions", () => {
+    const chosen = pickPrimaryMarket({
+      title: "Barcelona vs Real Madrid",
+      markets: [
+        mk({
+          marketId: "kills",
+          question: "Total Kills O/U 20.5",
+          groupItemTitle: "Total Kills",
+          liquidity: 1000,
+        }),
+        mk({
+          marketId: "winner",
+          question: "Will Barcelona beat Real Madrid?",
+          liquidity: 400,
+        }),
+      ],
+    });
+
+    expect(chosen?.marketId).toBe("winner");
   });
 
   it("respects abort signal", async () => {
