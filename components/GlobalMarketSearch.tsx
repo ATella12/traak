@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { SearchEventResult, SearchEventsStatus, SearchSort } from "@/src/lib/gammaSearch";
+import type { SearchEventRow, SearchEventsStatus, SearchSort } from "@/src/lib/gammaSearch";
 
 type SearchResponse = {
   q: string;
@@ -12,7 +12,7 @@ type SearchResponse = {
   error?: string;
   hasMore: boolean;
   totalResults?: number;
-  results: SearchEventResult[];
+  results: SearchEventRow[];
 };
 
 type GlobalMarketSearchProps = {
@@ -26,11 +26,13 @@ type GlobalMarketSearchProps = {
 const DEBOUNCE_MS = 300;
 const DEFAULT_LIMIT_PER_TYPE = 20;
 
-const SORT_OPTIONS: Array<{ label: string; value: SearchSort | "" }> = [
-  { label: "Trending / Volume", value: "volume_24hr" },
-  { label: "Liquidity", value: "liquidity" },
-  { label: "Newest", value: "newest" },
-  { label: "Ending Soon", value: "ending_soon" },
+const SORT_OPTIONS: Array<{ label: string; value: SearchSort | ""; enabled: boolean }> = [
+  { label: "Trending / Volume", value: "volume_24hr", enabled: true },
+  { label: "Liquidity", value: "liquidity", enabled: true },
+  // TODO: enable once Gamma search-v2 sort support is confirmed stable.
+  { label: "Newest", value: "newest", enabled: false },
+  // TODO: enable once Gamma search-v2 sort support is confirmed stable.
+  { label: "Ending Soon", value: "ending_soon", enabled: false },
 ];
 
 const STATUS_OPTIONS: Array<{ label: string; value: SearchEventsStatus }> = [
@@ -39,22 +41,19 @@ const STATUS_OPTIONS: Array<{ label: string; value: SearchEventsStatus }> = [
   { label: "All", value: "all" },
 ];
 
-const formatCompactNumber = (value?: number): string | null => {
+const formatCompactMoney = (value?: number, suffix = ""): string | null => {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return new Intl.NumberFormat("en-US", {
+  const base = new Intl.NumberFormat("en-US", {
     notation: "compact",
-    maximumFractionDigits: 2,
+    maximumFractionDigits: 1,
   }).format(value);
+  return `$${base}${suffix}`;
 };
 
-const getYesProbability = (item: SearchEventResult): string | null => {
-  const outcomes = item.primaryMarket.outcomes.map((entry) => entry.trim().toLowerCase());
-  const yesIndex = outcomes.findIndex((entry) => entry === "yes");
-  if (yesIndex < 0) return null;
-  const price = item.primaryMarket.outcomePrices[yesIndex];
-  if (!Number.isFinite(price)) return null;
-  const percent = Math.max(0, Math.min(100, price * 100));
-  return `${percent.toFixed(1)}% YES`;
+const formatProbability = (probability?: number): string | null => {
+  if (typeof probability !== "number" || !Number.isFinite(probability)) return null;
+  const pct = Math.round(Math.max(0, Math.min(1, probability)) * 100);
+  return `${pct}%`;
 };
 
 export default function GlobalMarketSearch({
@@ -67,7 +66,7 @@ export default function GlobalMarketSearch({
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [results, setResults] = useState<SearchEventResult[]>([]);
+  const [results, setResults] = useState<SearchEventRow[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [totalResults, setTotalResults] = useState<number | undefined>(undefined);
   const [page, setPage] = useState(1);
@@ -110,7 +109,8 @@ export default function GlobalMarketSearch({
         events_status: status,
         optimized: "false",
       });
-      if (sort) queryParams.set("sort", sort);
+      const selectedSort = SORT_OPTIONS.find((option) => option.value === sort);
+      if (sort && selectedSort?.enabled) queryParams.set("sort", sort);
 
       const response = await fetch(`/api/markets/search?${queryParams.toString()}`, { signal: controller.signal });
       const data = (await response.json()) as SearchResponse;
@@ -163,13 +163,13 @@ export default function GlobalMarketSearch({
     [canSearch, error, loading, results.length],
   );
 
-  const handleSelect = (item: SearchEventResult) => {
+  const handleSelect = (item: SearchEventRow) => {
     const params = new URLSearchParams({
-      q: item.primaryMarket.question,
-      cat: item.tag || item.eventTitle || "Other",
-      mid: item.primaryMarket.marketId,
+      q: item.displayMarket.question,
+      cat: item.primaryCategoryLine || "Other",
+      mid: item.displayMarket.marketId,
     });
-    router.push(`/portfolio/manual/all/${item.primaryMarket.slug}?${params.toString()}`);
+    router.push(`/portfolio/manual/all/${item.displayMarket.slug}?${params.toString()}`);
   };
 
   return (
@@ -194,12 +194,13 @@ export default function GlobalMarketSearch({
           <label className="text-xs text-slate-400">
             Sort
             <select
+              aria-label="Sort"
               value={sort}
               onChange={(event) => setSort(event.target.value as SearchSort | "")}
               className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-2 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
             >
               {SORT_OPTIONS.map((option) => (
-                <option key={option.label} value={option.value}>
+                <option key={option.label} value={option.value} disabled={!option.enabled}>
                   {option.label}
                 </option>
               ))}
@@ -209,6 +210,7 @@ export default function GlobalMarketSearch({
           <label className="text-xs text-slate-400">
             Status
             <select
+              aria-label="Status"
               value={status}
               onChange={(event) => setStatus(event.target.value as SearchEventsStatus)}
               className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-2 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
@@ -258,24 +260,44 @@ export default function GlobalMarketSearch({
             </p>
           ) : null}
 
-          <div className="max-h-80 overflow-y-auto">
+          <div className="max-h-96 overflow-y-auto">
             {results.map((item) => {
-              const probability = getYesProbability(item);
-              const liquidity = formatCompactNumber(item.primaryMarket.liquidity);
-              const volume = formatCompactNumber(item.primaryMarket.volume);
+              const probability = formatProbability(item.displayMarket.probabilityYes);
+              const volume = formatCompactMoney(item.volume24hr ?? item.volume, " Vol.");
+              const liquidity = formatCompactMoney(item.liquidity, " Liq.");
+              const categoryLine = item.primaryCategoryLine || "Other";
+              const iconUrl = item.icon || item.image;
+
               return (
                 <button
                   type="button"
-                  key={`${item.eventId}-${item.primaryMarket.marketId}`}
+                  key={`${item.eventId}-${item.displayMarket.marketId}`}
                   onClick={() => handleSelect(item)}
-                  className="block w-full border-t border-slate-800 px-4 py-3 text-left transition hover:bg-slate-800/70"
+                  className="grid w-full grid-cols-[40px_1fr_auto] items-start gap-3 border-t border-slate-800 px-4 py-3 text-left transition hover:bg-slate-800/70"
                 >
-                  <p className="text-sm font-medium text-slate-100">{item.eventTitle || item.primaryMarket.question}</p>
-                  <p className="mt-1 text-xs text-slate-400">{item.tag || "Other"}</p>
-                  <p className="mt-1 text-[11px] text-slate-500">
-                    {probability ? `${probability} · ` : ""}
-                    {liquidity ? `Liq ${liquidity}` : "Liq -"} · {volume ? `Vol ${volume}` : "Vol -"}
-                  </p>
+                  <div className="h-10 w-10 overflow-hidden rounded-md bg-slate-800">
+                    {iconUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={iconUrl} alt={item.eventTitle} className="h-full w-full object-cover" />
+                    ) : null}
+                  </div>
+
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-slate-100">{item.eventTitle}</p>
+                    {categoryLine ? <p className="mt-1 truncate text-xs text-slate-400">{categoryLine}</p> : null}
+                    <p className="mt-1 truncate text-[11px] text-slate-500">
+                      {volume ? `${volume}  ` : ""}
+                      {liquidity ? `${liquidity}  ` : ""}
+                      {item.endsInText || ""}
+                    </p>
+                  </div>
+
+                  <div className="text-right">
+                    {probability ? <p className="text-sm font-semibold text-slate-100">{probability}</p> : null}
+                    {item.displayMarket.groupItemTitle ? (
+                      <p className="mt-1 max-w-28 truncate text-[11px] text-slate-400">{item.displayMarket.groupItemTitle}</p>
+                    ) : null}
+                  </div>
                 </button>
               );
             })}

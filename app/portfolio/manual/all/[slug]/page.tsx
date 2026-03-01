@@ -5,7 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { addTransaction } from "@/src/lib/storage";
-import type { SearchEventResult } from "@/src/lib/gammaSearch";
+import type { SearchEventRow } from "@/src/lib/gammaSearch";
 
 type Side = "BUY" | "SELL";
 type Outcome = "YES" | "NO";
@@ -14,7 +14,7 @@ type SearchResponse = {
   q: string;
   stale: boolean;
   error?: string;
-  results: SearchEventResult[];
+  results: SearchEventRow[];
 };
 
 const getDefaultDateTimeLocal = (): string => {
@@ -64,13 +64,13 @@ export default function AddTransactionFromGlobalPage() {
         const data = (await response.json()) as SearchResponse;
         if (isCancelled) return;
 
-        const exact = data.results.find((item) => item.primaryMarket.slug === slug);
+        const exact = data.results.find((item) => item.displayMarket.slug === slug);
         const first = exact ?? data.results[0];
 
         if (first) {
-          setQuestion(first.primaryMarket.question);
-          setCategory(first.tag || first.eventTitle || "Other");
-          setResolvedMarketId(first.primaryMarket.marketId || queryMarketId);
+          setQuestion(first.displayMarket.question);
+          setCategory(first.primaryCategoryLine || first.eventTitle || "Other");
+          setResolvedMarketId(first.displayMarket.marketId || queryMarketId);
           setMarketDetailsWarning(null);
         } else {
           setCategory((current) => current || "Other");

@@ -12,38 +12,62 @@ export type SearchV2Params = {
   signal?: AbortSignal;
 };
 
+export type SearchTag = {
+  label: string;
+  slug: string;
+};
+
 export type SearchMarketResult = {
   marketId: string;
   question: string;
   slug: string;
-  conditionId?: string;
+  conditionId: string;
+  groupItemTitle?: string;
   active: boolean;
   closed: boolean;
   endDate?: string;
-  volume?: number;
-  liquidity?: number;
-  outcomes: string[];
-  outcomePrices: number[];
+  bestBid?: number;
+  bestAsk?: number;
+  volumeNum?: number;
+  liquidityNum?: number;
+  volume24hr?: number;
+  probabilityYes?: number;
 };
 
-export type SearchEventResult = {
+export type SearchEventRow = {
   eventId: string;
-  eventTitle?: string;
-  eventSlug?: string;
-  eventImage?: string;
-  eventIcon?: string;
-  tag?: string;
-  primaryMarket: SearchMarketResult;
+  eventTitle: string;
+  eventSlug: string;
+  image?: string;
+  icon?: string;
+  tags: SearchTag[];
+  primaryCategoryLine: string;
+  endsInText: string;
+  endDate?: string;
+  liquidity?: number;
+  volume?: number;
+  volume24hr?: number;
+  status: "active" | "resolved" | "closed" | "unknown";
+  displayMarket: SearchMarketResult;
 };
 
 export type SearchEventsPage = {
-  events: SearchEventResult[];
+  events: SearchEventRow[];
   hasMore: boolean;
   totalResults?: number;
 };
 
+export type SearchV2Response = {
+  events?: GammaEvent[];
+  pagination?: {
+    hasMore?: boolean;
+    totalResults?: number;
+  };
+};
+
 type GammaTag = {
   label?: string;
+  slug?: string;
   forceHide?: boolean;
 };
 
@@ -52,6 +76,7 @@ type GammaMarket = {
   question?: string;
   slug?: string;
   conditionId?: string;
+  groupItemTitle?: string;
   active?: boolean;
   closed?: boolean;
   endDate?: string;
@@ -59,8 +84,11 @@ type GammaMarket = {
   volumeNum?: number;
   liquidity?: number | string;
   liquidityNum?: number;
+  volume24hr?: number | string;
   outcomes?: string | string[];
   outcomePrices?: string | number[];
+  bestBid?: number | string;
+  bestAsk?: number | string;
 };
 
 type GammaEvent = {
@@ -69,22 +97,31 @@ type GammaEvent = {
   slug?: string;
   icon?: string;
   image?: string;
+  active?: boolean;
+  closed?: boolean;
+  endDate?: string;
+  liquidity?: number | string;
+  volume?: number | string;
+  volume24hr?: number | string;
   tags?: GammaTag[];
   markets?: GammaMarket[];
-};
-
-type SearchV2Response = {
-  events?: GammaEvent[];
-  pagination?: {
-    hasMore?: boolean;
-    totalResults?: number;
-  };
 };
 
 type FetchLike = typeof fetch;
 
 const GAMMA_BASE_URL = "https://gamma-api.polymarket.com";
 const DEFAULT_LIMIT_PER_TYPE = 20;
+
+const TOP_LEVEL_TAG_SLUGS = new Set([
+  "sports",
+  "politics",
+  "crypto",
+  "finance",
+  "world",
+  "news",
+  "culture",
+  "technology",
+]);
 
 const toFiniteNumber = (value: unknown): number | undefined => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -106,22 +143,13 @@ const toStringOrUndefined = (value: unknown): string | undefined => {
   return trimmed ? trimmed : undefined;
 };
 
-const parseStringArray = (value: unknown): string[] => {
-  if (Array.isArray(value)) {
-    return value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
-  }
-  if (typeof value === "string") {
-    try {
-      const parsed: unknown = JSON.parse(value);
-      if (Array.isArray(parsed)) {
-        return parsed.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
-      }
-    } catch {
-      return [];
-    }
-  }
-  return [];
-};
+const toNormalizedText = (value: string): string =>
+  value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
 const parseNumberArray = (value: unknown): number[] => {
   if (Array.isArray(value)) {
@@ -140,6 +168,15 @@ const parseNumberArray = (value: unknown): number[] => {
   return [];
 };
 
+const parseProbabilityYes = (market: GammaMarket): number | undefined => {
+  const prices = parseNumberArray(market.outcomePrices);
+  const yesPrice = prices[0];
+  if (typeof yesPrice !== "number" || !Number.isFinite(yesPrice)) return undefined;
+  if (yesPrice < 0) return 0;
+  if (yesPrice > 1) return 1;
+  return yesPrice;
+};
+
 const toMarketResult = (market: GammaMarket): SearchMarketResult | null => {
   const marketId = typeof market.id === "string" || typeof market.id === "number" ? String(market.id) : undefined;
   const question = toStringOrUndefined(market.question);
@@ -150,34 +187,103 @@ const toMarketResult = (market: GammaMarket): SearchMarketResult | null => {
     marketId,
     question,
     slug,
-    conditionId: toStringOrUndefined(market.conditionId),
+    conditionId: toStringOrUndefined(market.conditionId) ?? "",
+    groupItemTitle: toStringOrUndefined(market.groupItemTitle),
     active: coerceBoolean(market.active, false),
     closed: coerceBoolean(market.closed, false),
     endDate: toStringOrUndefined(market.endDate),
-    volume: toFiniteNumber(market.volumeNum ?? market.volume),
-    liquidity: toFiniteNumber(market.liquidityNum ?? market.liquidity),
-    outcomes: parseStringArray(market.outcomes),
-    outcomePrices: parseNumberArray(market.outcomePrices),
+    bestBid: toFiniteNumber(market.bestBid),
+    bestAsk: toFiniteNumber(market.bestAsk),
+    volumeNum: toFiniteNumber(market.volumeNum ?? market.volume),
+    liquidityNum: toFiniteNumber(market.liquidityNum ?? market.liquidity),
+    volume24hr: toFiniteNumber(market.volume24hr),
+    probabilityYes: parseProbabilityYes(market),
   };
 };
 
-const isYesNoMarket = (market: SearchMarketResult): boolean => {
-  if (market.outcomes.length !== 2) return false;
-  const outcomes = market.outcomes.map((item) => item.trim().toLowerCase());
-  return outcomes.includes("yes") && outcomes.includes("no");
+const isDrawMarket = (market: SearchMarketResult): boolean => {
+  const groupTitle = toNormalizedText(market.groupItemTitle ?? "");
+  const question = toNormalizedText(market.question);
+  return groupTitle.includes("draw") || question.includes("end in a draw");
 };
 
-const depthScore = (market: SearchMarketResult): number => {
-  if (typeof market.liquidity === "number") return market.liquidity;
-  if (typeof market.volume === "number") return market.volume;
+const compareMarketCandidates = (a: SearchMarketResult, b: SearchMarketResult): number => {
+  const aVolumeScore = a.volume24hr ?? a.volumeNum ?? -1;
+  const bVolumeScore = b.volume24hr ?? b.volumeNum ?? -1;
+  if (bVolumeScore !== aVolumeScore) return bVolumeScore - aVolumeScore;
+
+  const aLiquidityScore = a.liquidityNum ?? -1;
+  const bLiquidityScore = b.liquidityNum ?? -1;
+  if (bLiquidityScore !== aLiquidityScore) return bLiquidityScore - aLiquidityScore;
+
+  const aDist = typeof a.probabilityYes === "number" ? Math.abs(a.probabilityYes - 0.5) : Number.POSITIVE_INFINITY;
+  const bDist = typeof b.probabilityYes === "number" ? Math.abs(b.probabilityYes - 0.5) : Number.POSITIVE_INFINITY;
+  if (aDist !== bDist) return aDist - bDist;
+
   return 0;
 };
 
-export const pickPrimaryMarket = (markets: SearchMarketResult[]): SearchMarketResult | null => {
+export const pickDisplayMarket = (markets: SearchMarketResult[]): SearchMarketResult | null => {
   if (markets.length === 0) return null;
-  const yesNo = markets.filter(isYesNoMarket);
-  const pool = yesNo.length > 0 ? yesNo : markets;
-  return [...pool].sort((a, b) => depthScore(b) - depthScore(a))[0] ?? null;
+  const nonDraw = markets.filter((market) => !isDrawMarket(market));
+  const candidates = nonDraw.length > 0 ? nonDraw : markets;
+  return [...candidates].sort(compareMarketCandidates)[0] ?? null;
+};
+
+export const buildCategoryLine = (tags: SearchTag[]): string => {
+  if (tags.length === 0) return "";
+
+  const top = tags.find((tag) => TOP_LEVEL_TAG_SLUGS.has(tag.slug.toLowerCase()));
+  const sub = tags.find((tag) => {
+    const slug = tag.slug.toLowerCase();
+    if (top && slug === top.slug.toLowerCase()) return false;
+    return !TOP_LEVEL_TAG_SLUGS.has(slug);
+  });
+
+  if (top && sub) return `${top.label}  ${sub.label}`;
+  if (top) return top.label;
+  if (sub) return sub.label;
+  return tags[0]?.label ?? "";
+};
+
+export const formatEndsIn = (endDate: string | undefined, now = new Date()): string => {
+  if (!endDate) return "";
+  const end = new Date(endDate);
+  if (Number.isNaN(end.getTime())) return "";
+
+  const diffMs = end.getTime() - now.getTime();
+  if (diffMs <= 0) return "Ended";
+
+  const diffMinutes = Math.round(diffMs / 60_000);
+  if (diffMinutes < 60) return `Ends in ${diffMinutes} minutes`;
+
+  const diffHours = Math.round(diffMinutes / 60);
+  if (diffHours < 24) return `Ends in about ${diffHours} hours`;
+
+  const diffDays = Math.round(diffHours / 24);
+  return `Ends in ${diffDays} days`;
+};
+
+const toSearchTags = (tags: GammaTag[] | undefined): SearchTag[] => {
+  if (!Array.isArray(tags)) return [];
+  return tags
+    .filter((tag) => tag.forceHide !== true)
+    .map((tag) => {
+      const label = toStringOrUndefined(tag.label);
+      const slug = toStringOrUndefined(tag.slug);
+      if (!label || !slug) return null;
+      return { label, slug };
+    })
+    .filter((tag): tag is SearchTag => tag !== null);
+};
+
+const deriveStatus = (event: GammaEvent): SearchEventRow["status"] => {
+  const active = coerceBoolean(event.active, false);
+  const closed = coerceBoolean(event.closed, false);
+  if (active && !closed) return "active";
+  if (closed) return "closed";
+  if (!active && !closed) return "resolved";
+  return "unknown";
 };
 
 export const buildSearchV2Url = (params: Omit<SearchV2Params, "signal">): URL => {
@@ -192,36 +298,41 @@ export const buildSearchV2Url = (params: Omit<SearchV2Params, "signal">): URL =>
   return url;
 };
 
-const pickTag = (tags: GammaTag[] | undefined): string | undefined => {
-  if (!Array.isArray(tags)) return undefined;
-  const firstVisible = tags.find((tag) => tag.forceHide !== true && typeof tag.label === "string");
-  return toStringOrUndefined(firstVisible?.label);
-};
-
-export const normalizeSearchV2Response = (payload: unknown): SearchEventsPage => {
+export const normalizeSearchV2Response = (payload: unknown, now = new Date()): SearchEventsPage => {
   const safePayload = (payload ?? {}) as SearchV2Response;
   const events = Array.isArray(safePayload.events) ? safePayload.events : [];
-  const normalized: SearchEventResult[] = [];
+  const normalized: SearchEventRow[] = [];
 
   for (const event of events) {
     const eventId = typeof event.id === "string" || typeof event.id === "number" ? String(event.id) : undefined;
-    if (!eventId) continue;
+    const eventTitle = toStringOrUndefined(event.title);
+    const eventSlug = toStringOrUndefined(event.slug);
+    if (!eventId || !eventTitle || !eventSlug) continue;
 
     const markets = (Array.isArray(event.markets) ? event.markets : [])
       .map(toMarketResult)
       .filter((item): item is SearchMarketResult => item !== null);
+    const displayMarket = pickDisplayMarket(markets);
+    if (!displayMarket) continue;
 
-    const primaryMarket = pickPrimaryMarket(markets);
-    if (!primaryMarket) continue;
+    const tags = toSearchTags(event.tags);
+    const endDate = toStringOrUndefined(event.endDate);
 
     normalized.push({
       eventId,
-      eventTitle: toStringOrUndefined(event.title),
-      eventSlug: toStringOrUndefined(event.slug),
-      eventImage: toStringOrUndefined(event.image),
-      eventIcon: toStringOrUndefined(event.icon),
-      tag: pickTag(event.tags),
-      primaryMarket,
+      eventTitle,
+      eventSlug,
+      image: toStringOrUndefined(event.image),
+      icon: toStringOrUndefined(event.icon),
+      tags,
+      primaryCategoryLine: buildCategoryLine(tags),
+      endsInText: formatEndsIn(endDate, now),
+      endDate,
+      liquidity: toFiniteNumber(event.liquidity),
+      volume: toFiniteNumber(event.volume),
+      volume24hr: toFiniteNumber(event.volume24hr),
+      status: deriveStatus(event),
+      displayMarket,
     });
   }
 

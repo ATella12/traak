@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   searchV2,
   type SearchEventsPage,
-  type SearchEventResult,
+  type SearchEventRow,
   type SearchEventsStatus,
   type SearchSort,
 } from "@/src/lib/gammaSearch";
@@ -15,7 +15,7 @@ type SearchResponse = {
   error?: string;
   hasMore: boolean;
   totalResults?: number;
-  results: SearchEventResult[];
+  results: SearchEventRow[];
 };
 
 type CachedSearch = {
@@ -28,7 +28,8 @@ const DEFAULT_LIMIT_PER_TYPE = 20;
 const MAX_LIMIT_PER_TYPE = 50;
 const cache = new Map<string, CachedSearch>();
 
-const allowedSorts: SearchSort[] = ["volume_24hr", "liquidity", "ending_soon", "newest"];
+// TODO: enable "newest" / "ending_soon" after confirming stable API support in production.
+const allowedSorts: SearchSort[] = ["volume_24hr", "liquidity"];
 const allowedStatuses: SearchEventsStatus[] = ["active", "resolved", "all"];
 
 const clampLimit = (value: string | null): number => {
