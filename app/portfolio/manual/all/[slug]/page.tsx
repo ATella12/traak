@@ -60,7 +60,7 @@ export default function AddTransactionFromGlobalPage() {
       setResolving(true);
       try {
         const lookupQuery = queryQuestion || normalizeQueryText(slug);
-        const response = await fetch(`/api/markets/search?q=${encodeURIComponent(lookupQuery)}&limit=25`);
+        const response = await fetch(`/api/markets/search?q=${encodeURIComponent(lookupQuery)}&limit_per_type=20`);
         const data = (await response.json()) as SearchResponse;
         if (isCancelled) return;
 
@@ -69,7 +69,7 @@ export default function AddTransactionFromGlobalPage() {
 
         if (first) {
           setQuestion(first.primaryMarket.question);
-          setCategory(first.eventTitle || "Other");
+          setCategory(first.tag || first.eventTitle || "Other");
           setResolvedMarketId(first.primaryMarket.marketId || queryMarketId);
           setMarketDetailsWarning(null);
         } else {

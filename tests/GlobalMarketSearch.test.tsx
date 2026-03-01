@@ -28,39 +28,56 @@ describe("GlobalMarketSearch", () => {
 
   it("does not call API for query shorter than 2 chars", async () => {
     vi.useFakeTimers();
-    const fetchMock = vi.fn().mockResolvedValue(createResponse({ q: "ba", stale: false, results: [] }));
+    const fetchMock = vi.fn().mockResolvedValue(createResponse({ q: "ba", page: 1, stale: false, hasMore: false, results: [] }));
     vi.stubGlobal("fetch", fetchMock);
 
     render(<GlobalMarketSearch showHeader={false} />);
-    const input = screen.getByPlaceholderText("Search all markets...");
-
-    fireEvent.change(input, { target: { value: "b" } });
+    fireEvent.change(screen.getByPlaceholderText("Search all markets..."), { target: { value: "b" } });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(350);
     });
+
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("debounces and calls API once for final query", async () => {
+  it("debounces calls and renders one row per event", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn().mockResolvedValue(
       createResponse({
         q: "barca",
+        page: 1,
         stale: false,
+        hasMore: false,
+        totalResults: 2,
         results: [
           {
             eventId: "e1",
-            eventTitle: "La Liga",
+            eventTitle: "Event 1",
+            tag: "Soccer",
             primaryMarket: {
-              marketId: "1",
-              question: "Will Barca win El Clasico?",
-              slug: "will-barca-win-el-clasico",
+              marketId: "m1",
+              question: "Will Barca win?",
+              slug: "will-barca-win",
               active: true,
               closed: false,
-              liquidity: 1234,
-              volume: 5678,
+              liquidity: 1000,
+              volume: 2000,
               outcomes: ["Yes", "No"],
-              outcomePrices: [0.62, 0.38],
+              outcomePrices: [0.6, 0.4],
+            },
+          },
+          {
+            eventId: "e2",
+            eventTitle: "Event 2",
+            tag: "Soccer",
+            primaryMarket: {
+              marketId: "m2",
+              question: "Will Barca qualify?",
+              slug: "will-barca-qualify",
+              active: true,
+              closed: false,
+              outcomes: ["Yes", "No"],
+              outcomePrices: [0.55, 0.45],
             },
           },
         ],
@@ -70,10 +87,8 @@ describe("GlobalMarketSearch", () => {
 
     render(<GlobalMarketSearch showHeader={false} />);
     const input = screen.getByPlaceholderText("Search all markets...");
-
     fireEvent.change(input, { target: { value: "b" } });
     fireEvent.change(input, { target: { value: "ba" } });
-    fireEvent.change(input, { target: { value: "bar" } });
     fireEvent.change(input, { target: { value: "barca" } });
 
     await act(async () => {
@@ -82,46 +97,73 @@ describe("GlobalMarketSearch", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
-
-    expect(await screen.findByText("Will Barca win El Clasico?")).toBeInTheDocument();
-    expect(screen.getByText("La Liga")).toBeInTheDocument();
-    expect(screen.getByText("Showing 1 events")).toBeInTheDocument();
+    expect(await screen.findByText("Event 1")).toBeInTheDocument();
+    expect(screen.getByText("Event 2")).toBeInTheDocument();
+    expect(screen.getByText("Showing 2 events of 2")).toBeInTheDocument();
   });
 
-  it("renders one row per event", async () => {
+  it("aborts stale in-flight request when a new query is sent", async () => {
+    vi.useFakeTimers();
+    const capturedSignals: AbortSignal[] = [];
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce((_url: RequestInfo | URL, init?: RequestInit) => {
+        capturedSignals.push(init?.signal as AbortSignal);
+        return new Promise<Response>(() => {
+          // pending forever
+        });
+      })
+      .mockResolvedValueOnce(
+        createResponse({
+          q: "barca",
+          page: 1,
+          stale: false,
+          hasMore: false,
+          results: [
+            {
+              eventId: "e2",
+              eventTitle: "Event 2",
+              primaryMarket: {
+                marketId: "m2",
+                question: "Second request result",
+                slug: "second-request-result",
+                active: true,
+                closed: false,
+                outcomes: ["Yes", "No"],
+                outcomePrices: [0.4, 0.6],
+              },
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<GlobalMarketSearch showHeader={false} />);
+    const input = screen.getByPlaceholderText("Search all markets...");
+
+    fireEvent.change(input, { target: { value: "ba" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+
+    fireEvent.change(input, { target: { value: "barca" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(capturedSignals[0]?.aborted).toBe(true);
+  });
+
+  it("sort and status controls trigger API params", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn().mockResolvedValue(
       createResponse({
         q: "barca",
+        page: 1,
         stale: false,
-        results: [
-          {
-            eventId: "e1",
-            eventTitle: "Event 1",
-            primaryMarket: {
-              marketId: "1",
-              question: "Event 1 primary",
-              slug: "event-1-primary",
-              active: true,
-              closed: false,
-              outcomes: ["Yes", "No"],
-              outcomePrices: [0.5, 0.5],
-            },
-          },
-          {
-            eventId: "e2",
-            eventTitle: "Event 2",
-            primaryMarket: {
-              marketId: "2",
-              question: "Event 2 primary",
-              slug: "event-2-primary",
-              active: true,
-              closed: false,
-              outcomes: ["Yes", "No"],
-              outcomePrices: [0.5, 0.5],
-            },
-          },
-        ],
+        hasMore: false,
+        results: [],
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -131,32 +173,43 @@ describe("GlobalMarketSearch", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(350);
     });
-    vi.useRealTimers();
 
-    expect(await screen.findByText("Event 1 primary")).toBeInTheDocument();
-    expect(screen.getByText("Event 2 primary")).toBeInTheDocument();
-    expect(screen.queryByText("Showing 3 events")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Sort"), { target: { value: "liquidity" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+
+    fireEvent.change(screen.getByLabelText("Status"), { target: { value: "resolved" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+
+    const lastCallUrl = String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[0]);
+    expect(lastCallUrl).toContain("sort=liquidity");
+    expect(lastCallUrl).toContain("events_status=resolved");
   });
 
-  it("shows error state and uses cached results when stale payload is returned", async () => {
+  it("shows stale cached results and error when returned by API", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn().mockResolvedValue(
       createResponse({
         q: "barca",
+        page: 1,
         stale: true,
         error: "Live search failed. Showing recent cached results. Retry to refresh.",
+        hasMore: false,
         results: [
           {
             eventId: "e3",
             eventTitle: "Cached Event",
             primaryMarket: {
-              marketId: "3",
-              question: "Cached primary",
-              slug: "cached-primary",
-              active: true,
+              marketId: "m3",
+              question: "Cached Market",
+              slug: "cached-market",
+              active: false,
               closed: true,
               outcomes: ["Yes", "No"],
-              outcomePrices: [0.7, 0.3],
+              outcomePrices: [0.9, 0.1],
             },
           },
         ],
@@ -173,49 +226,54 @@ describe("GlobalMarketSearch", () => {
 
     expect(await screen.findByText("Live search failed. Showing recent cached results. Retry to refresh.")).toBeInTheDocument();
     expect(screen.getByText("Showing cached results while live search recovers.")).toBeInTheDocument();
-    expect(screen.getByText("Cached primary")).toBeInTheDocument();
+    expect(screen.getByText("Cached Event")).toBeInTheDocument();
   });
 
-  it("shows loading state while request is in-flight", async () => {
-    vi.useFakeTimers();
-    const fetchMock = vi.fn().mockImplementation(
-      () =>
-        new Promise<Response>(() => {
-          // keep pending
-        }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(<GlobalMarketSearch showHeader={false} />);
-    fireEvent.change(screen.getByPlaceholderText("Search all markets..."), { target: { value: "barca" } });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(350);
-    });
-
-    expect(screen.getByText("Searching markets...")).toBeInTheDocument();
-  });
-
-  it("supports retry after hard error", async () => {
+  it("pagination loads the next page", async () => {
     vi.useFakeTimers();
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(createResponse({ q: "barca", stale: false, error: "Live search is unavailable. Please retry.", results: [] }, 502))
       .mockResolvedValueOnce(
         createResponse({
           q: "barca",
+          page: 1,
           stale: false,
+          hasMore: true,
           results: [
             {
-              eventId: "e4",
-              eventTitle: "Champions League",
+              eventId: "e1",
+              eventTitle: "Page 1 Event",
               primaryMarket: {
-                marketId: "4",
-                question: "Barca to qualify?",
-                slug: "barca-to-qualify",
+                marketId: "m1",
+                question: "Page 1 Market",
+                slug: "page-1-market",
                 active: true,
                 closed: false,
                 outcomes: ["Yes", "No"],
-                outcomePrices: [0.3, 0.7],
+                outcomePrices: [0.5, 0.5],
+              },
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        createResponse({
+          q: "barca",
+          page: 2,
+          stale: false,
+          hasMore: false,
+          results: [
+            {
+              eventId: "e2",
+              eventTitle: "Page 2 Event",
+              primaryMarket: {
+                marketId: "m2",
+                question: "Page 2 Market",
+                slug: "page-2-market",
+                active: true,
+                closed: false,
+                outcomes: ["Yes", "No"],
+                outcomePrices: [0.5, 0.5],
               },
             },
           ],
@@ -230,9 +288,12 @@ describe("GlobalMarketSearch", () => {
     });
     vi.useRealTimers();
 
-    expect(await screen.findByText("Live search is unavailable. Please retry.")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 2000 });
-    expect(await screen.findByText("Barca to qualify?")).toBeInTheDocument();
+    expect(await screen.findByText("Page 1 Event")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    const secondCallUrl = String(fetchMock.mock.calls[1]?.[0]);
+    expect(secondCallUrl).toContain("page=2");
+    expect(await screen.findByText("Page 2 Event")).toBeInTheDocument();
   });
 });

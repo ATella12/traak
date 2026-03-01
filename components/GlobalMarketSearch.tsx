@@ -3,12 +3,15 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { SearchEventResult, SearchMarketResult } from "@/src/lib/gammaSearch";
+import type { SearchEventResult, SearchEventsStatus, SearchSort } from "@/src/lib/gammaSearch";
 
 type SearchResponse = {
   q: string;
+  page: number;
   stale: boolean;
   error?: string;
+  hasMore: boolean;
+  totalResults?: number;
   results: SearchEventResult[];
 };
 
@@ -21,7 +24,20 @@ type GlobalMarketSearchProps = {
 };
 
 const DEBOUNCE_MS = 300;
-const DEFAULT_LIMIT_PER_TYPE = 15;
+const DEFAULT_LIMIT_PER_TYPE = 20;
+
+const SORT_OPTIONS: Array<{ label: string; value: SearchSort | "" }> = [
+  { label: "Trending / Volume", value: "volume_24hr" },
+  { label: "Liquidity", value: "liquidity" },
+  { label: "Newest", value: "newest" },
+  { label: "Ending Soon", value: "ending_soon" },
+];
+
+const STATUS_OPTIONS: Array<{ label: string; value: SearchEventsStatus }> = [
+  { label: "Active", value: "active" },
+  { label: "Resolved", value: "resolved" },
+  { label: "All", value: "all" },
+];
 
 const formatCompactNumber = (value?: number): string | null => {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
@@ -31,14 +47,13 @@ const formatCompactNumber = (value?: number): string | null => {
   }).format(value);
 };
 
-const getYesProbability = (market: SearchMarketResult): string | null => {
-  if (market.outcomes.length !== 2 || market.outcomePrices.length !== 2) return null;
-  const normalizedOutcomes = market.outcomes.map((item) => item.trim().toLowerCase());
-  const yesIndex = normalizedOutcomes.findIndex((item) => item === "yes" || item === "true");
+const getYesProbability = (item: SearchEventResult): string | null => {
+  const outcomes = item.primaryMarket.outcomes.map((entry) => entry.trim().toLowerCase());
+  const yesIndex = outcomes.findIndex((entry) => entry === "yes");
   if (yesIndex < 0) return null;
-  const rawPrice = market.outcomePrices[yesIndex];
-  if (!Number.isFinite(rawPrice)) return null;
-  const percent = Math.max(0, Math.min(100, rawPrice * 100));
+  const price = item.primaryMarket.outcomePrices[yesIndex];
+  if (!Number.isFinite(price)) return null;
+  const percent = Math.max(0, Math.min(100, price * 100));
   return `${percent.toFixed(1)}% YES`;
 };
 
@@ -53,6 +68,11 @@ export default function GlobalMarketSearch({
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [results, setResults] = useState<SearchEventResult[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [totalResults, setTotalResults] = useState<number | undefined>(undefined);
+  const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<SearchSort | "">("volume_24hr");
+  const [status, setStatus] = useState<SearchEventsStatus>("active");
   const [stale, setStale] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,8 +92,8 @@ export default function GlobalMarketSearch({
 
   const canSearch = debouncedQuery.length >= 2;
 
-  const fetchSearch = async (queryToSearch: string) => {
-    if (queryToSearch.length < 2) return;
+  const fetchSearch = async (params: { queryToSearch: string; pageToFetch: number; append: boolean }) => {
+    if (params.queryToSearch.length < 2) return;
 
     const requestId = ++requestIdRef.current;
     controllerRef.current?.abort();
@@ -83,26 +103,33 @@ export default function GlobalMarketSearch({
     setError(null);
 
     try {
-      const params = new URLSearchParams({
-        q: queryToSearch,
+      const queryParams = new URLSearchParams({
+        q: params.queryToSearch,
+        page: String(params.pageToFetch),
         limit_per_type: String(DEFAULT_LIMIT_PER_TYPE),
-        keep_closed_markets: "1",
+        events_status: status,
+        optimized: "false",
       });
-      const response = await fetch(`/api/markets/search?${params.toString()}`, {
-        signal: controller.signal,
-      });
-      const data = (await response.json()) as SearchResponse;
+      if (sort) queryParams.set("sort", sort);
 
+      const response = await fetch(`/api/markets/search?${queryParams.toString()}`, { signal: controller.signal });
+      const data = (await response.json()) as SearchResponse;
       if (requestId !== requestIdRef.current) return;
 
-      setResults(data.results ?? []);
+      setResults((current) => (params.append ? [...current, ...data.results] : data.results));
+      setHasMore(data.hasMore);
+      setTotalResults(data.totalResults);
       setStale(Boolean(data.stale));
       setError(data.error ?? null);
+      setPage(params.pageToFetch);
     } catch (caughtError) {
       if (requestId !== requestIdRef.current) return;
       if (controller.signal.aborted) return;
 
-      setResults([]);
+      if (!params.append) {
+        setResults([]);
+        setHasMore(false);
+      }
       setStale(false);
       setError(
         caughtError instanceof Error && caughtError.name === "AbortError"
@@ -119,25 +146,30 @@ export default function GlobalMarketSearch({
   useEffect(() => {
     if (!canSearch) {
       setResults([]);
+      setHasMore(false);
+      setTotalResults(undefined);
+      setPage(1);
       setStale(false);
       setError(null);
       return;
     }
 
-    void fetchSearch(debouncedQuery);
+    void fetchSearch({ queryToSearch: debouncedQuery, pageToFetch: 1, append: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedQuery]);
+  }, [debouncedQuery, sort, status]);
 
-  const showResults = useMemo(() => canSearch || loading || results.length > 0 || Boolean(error), [canSearch, error, loading, results.length]);
+  const showResults = useMemo(
+    () => canSearch || loading || results.length > 0 || Boolean(error),
+    [canSearch, error, loading, results.length],
+  );
 
   const handleSelect = (item: SearchEventResult) => {
-    const market = item.primaryMarket;
     const params = new URLSearchParams({
-      q: market.question,
-      cat: item.eventTitle || "Other",
+      q: item.primaryMarket.question,
+      cat: item.tag || item.eventTitle || "Other",
+      mid: item.primaryMarket.marketId,
     });
-    params.set("mid", market.marketId);
-    router.push(`/portfolio/manual/all/${market.slug}?${params.toString()}`);
+    router.push(`/portfolio/manual/all/${item.primaryMarket.slug}?${params.toString()}`);
   };
 
   return (
@@ -149,7 +181,7 @@ export default function GlobalMarketSearch({
         </>
       ) : null}
 
-      <div className={showHeader ? "mt-4" : ""}>
+      <div className={showHeader ? "mt-4 space-y-3" : "space-y-3"}>
         <input
           type="text"
           value={query}
@@ -157,6 +189,38 @@ export default function GlobalMarketSearch({
           placeholder={placeholder}
           className="w-full rounded-xl border border-slate-700 bg-slate-900/70 px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-500"
         />
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <label className="text-xs text-slate-400">
+            Sort
+            <select
+              value={sort}
+              onChange={(event) => setSort(event.target.value as SearchSort | "")}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-2 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.label} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="text-xs text-slate-400">
+            Status
+            <select
+              value={status}
+              onChange={(event) => setStatus(event.target.value as SearchEventsStatus)}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-2 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
+            >
+              {STATUS_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
       <p className="mt-2 text-xs text-slate-500">Type at least 2 characters to search Polymarket markets.</p>
 
@@ -175,7 +239,7 @@ export default function GlobalMarketSearch({
               <p className="text-sm text-amber-300">{error}</p>
               <button
                 type="button"
-                onClick={() => void fetchSearch(debouncedQuery)}
+                onClick={() => void fetchSearch({ queryToSearch: debouncedQuery, pageToFetch: 1, append: false })}
                 disabled={loading || !canSearch}
                 className="rounded-lg border border-amber-500/50 px-2 py-1 text-xs text-amber-200 transition hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -189,34 +253,46 @@ export default function GlobalMarketSearch({
           ) : null}
 
           {results.length > 0 ? (
-            <p className="px-4 pt-3 text-xs text-slate-500">Showing {results.length} events</p>
+            <p className="px-4 pt-3 text-xs text-slate-500">
+              Showing {results.length} events{typeof totalResults === "number" ? ` of ${totalResults}` : ""}
+            </p>
           ) : null}
 
           <div className="max-h-80 overflow-y-auto">
             {results.map((item) => {
-              const market = item.primaryMarket;
-              const probability = getYesProbability(market);
-              const liquidity = formatCompactNumber(market.liquidity);
-              const volume = formatCompactNumber(market.volume);
+              const probability = getYesProbability(item);
+              const liquidity = formatCompactNumber(item.primaryMarket.liquidity);
+              const volume = formatCompactNumber(item.primaryMarket.volume);
               return (
                 <button
                   type="button"
-                  key={`${item.eventId}-${market.marketId}`}
+                  key={`${item.eventId}-${item.primaryMarket.marketId}`}
                   onClick={() => handleSelect(item)}
                   className="block w-full border-t border-slate-800 px-4 py-3 text-left transition hover:bg-slate-800/70"
                 >
-                  <p className="text-sm font-medium text-slate-100">{market.question || item.eventTitle || "Market"}</p>
-                  <p className="mt-1 text-xs text-slate-400">{item.eventTitle || "Other"}</p>
+                  <p className="text-sm font-medium text-slate-100">{item.eventTitle || item.primaryMarket.question}</p>
+                  <p className="mt-1 text-xs text-slate-400">{item.tag || "Other"}</p>
                   <p className="mt-1 text-[11px] text-slate-500">
                     {probability ? `${probability} · ` : ""}
-                    {liquidity ? `Liq ${liquidity}` : "Liq -"}
-                    {" · "}
-                    {volume ? `Vol ${volume}` : "Vol -"}
+                    {liquidity ? `Liq ${liquidity}` : "Liq -"} · {volume ? `Vol ${volume}` : "Vol -"}
                   </p>
                 </button>
               );
             })}
           </div>
+
+          {hasMore ? (
+            <div className="border-t border-slate-800 p-3">
+              <button
+                type="button"
+                disabled={loading}
+                onClick={() => void fetchSearch({ queryToSearch: debouncedQuery, pageToFetch: page + 1, append: true })}
+                className="w-full rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loading ? "Loading..." : "Load more"}
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : (
         <div className="mt-3 rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-6">
