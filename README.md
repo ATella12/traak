@@ -1,36 +1,57 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Traak
 
-## Getting Started
+Prediction market portfolio tracker built with Next.js App Router + TypeScript + Tailwind.
 
-First, run the development server:
+## Local setup
+
+1. Install dependencies:
+
+```bash
+npm install
+```
+
+2. Create environment file:
+
+```bash
+cp .env.example .env
+```
+
+3. Generate Prisma client and create SQLite schema:
+
+```bash
+npm run prisma:generate
+npx prisma db push
+```
+
+4. Run app:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Market search behavior
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+`/api/markets/search` proxies Polymarket Gamma `GET /public-search` and keeps a short in-memory cache to smooth over transient failures.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Defaults:
 
-## Learn More
+- `keep_closed_markets=1` (closed/resolved markets included)
+- `limit_per_type=10`
+- searches run when query length is at least 2
 
-To learn more about Next.js, take a look at the following resources:
+## Optional: build local market index
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Set `ADMIN_TOKEN` in `.env`, then call the admin sync endpoint.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```powershell
+$token = "replace-with-a-strong-token"
+Invoke-RestMethod -Method POST `
+  -Uri "http://localhost:3000/api/admin/sync-markets" `
+  -Headers @{ "x-admin-token" = $token }
+```
 
-## Deploy on Vercel
+This indexes Polymarket markets into local SQLite for local data workflows.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Dev-only sync endpoint
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`POST /api/dev/sync-markets` works only when `NODE_ENV !== "production"` and `DEV_ADMIN_TOKEN` is set.
