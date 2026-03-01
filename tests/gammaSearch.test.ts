@@ -15,6 +15,8 @@ const market = (overrides: Partial<SearchMarketResult> = {}): SearchMarketResult
   question: "Will Barcelona win?",
   slug: "will-barcelona-win",
   conditionId: "0xcond",
+  outcomes: ["Yes", "No"],
+  outcomePrices: [0.5, 0.5],
   active: true,
   closed: false,
   probabilityYes: 0.5,

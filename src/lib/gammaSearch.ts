@@ -23,6 +23,8 @@ export type SearchMarketResult = {
   slug: string;
   conditionId: string;
   groupItemTitle?: string;
+  outcomes: string[];
+  outcomePrices: number[];
   active: boolean;
   closed: boolean;
   endDate?: string;
@@ -55,6 +57,11 @@ export type SearchEventsPage = {
   events: SearchEventRow[];
   hasMore: boolean;
   totalResults?: number;
+};
+
+export type SearchEventDetail = {
+  event: SearchEventRow;
+  markets: SearchMarketResult[];
 };
 
 export type SearchV2Response = {
@@ -168,13 +175,32 @@ const parseNumberArray = (value: unknown): number[] => {
   return [];
 };
 
+export const parseOutcomePrices = (value: unknown): number[] => parseNumberArray(value);
+
 const parseProbabilityYes = (market: GammaMarket): number | undefined => {
-  const prices = parseNumberArray(market.outcomePrices);
+  const prices = parseOutcomePrices(market.outcomePrices);
   const yesPrice = prices[0];
   if (typeof yesPrice !== "number" || !Number.isFinite(yesPrice)) return undefined;
   if (yesPrice < 0) return 0;
   if (yesPrice > 1) return 1;
   return yesPrice;
+};
+
+const parseOutcomes = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string");
+  }
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((item): item is string => typeof item === "string");
+      }
+    } catch {
+      return [];
+    }
+  }
+  return [];
 };
 
 const toMarketResult = (market: GammaMarket): SearchMarketResult | null => {
@@ -189,6 +215,8 @@ const toMarketResult = (market: GammaMarket): SearchMarketResult | null => {
     slug,
     conditionId: toStringOrUndefined(market.conditionId) ?? "",
     groupItemTitle: toStringOrUndefined(market.groupItemTitle),
+    outcomes: parseOutcomes(market.outcomes),
+    outcomePrices: parseOutcomePrices(market.outcomePrices),
     active: coerceBoolean(market.active, false),
     closed: coerceBoolean(market.closed, false),
     endDate: toStringOrUndefined(market.endDate),
@@ -229,6 +257,21 @@ export const pickDisplayMarket = (markets: SearchMarketResult[]): SearchMarketRe
   const candidates = nonDraw.length > 0 ? nonDraw : markets;
   return [...candidates].sort(compareMarketCandidates)[0] ?? null;
 };
+
+export const sortMarketsForEvent = (markets: SearchMarketResult[]): SearchMarketResult[] =>
+  [...markets].sort((a, b) => {
+    const aProbability = typeof a.probabilityYes === "number" ? a.probabilityYes : -1;
+    const bProbability = typeof b.probabilityYes === "number" ? b.probabilityYes : -1;
+    if (bProbability !== aProbability) return bProbability - aProbability;
+
+    const aVolume = a.volume24hr ?? a.volumeNum ?? -1;
+    const bVolume = b.volume24hr ?? b.volumeNum ?? -1;
+    if (bVolume !== aVolume) return bVolume - aVolume;
+
+    const aLiquidity = a.liquidityNum ?? -1;
+    const bLiquidity = b.liquidityNum ?? -1;
+    return bLiquidity - aLiquidity;
+  });
 
 export const buildCategoryLine = (tags: SearchTag[]): string => {
   if (tags.length === 0) return "";
@@ -286,6 +329,50 @@ const deriveStatus = (event: GammaEvent): SearchEventRow["status"] => {
   return "unknown";
 };
 
+const normalizeEventRow = (event: GammaEvent, now: Date): SearchEventDetail | null => {
+  const eventId = typeof event.id === "string" || typeof event.id === "number" ? String(event.id) : undefined;
+  const eventTitle = toStringOrUndefined(event.title);
+  const eventSlug = toStringOrUndefined(event.slug);
+  if (!eventId || !eventTitle || !eventSlug) return null;
+
+  const markets = (Array.isArray(event.markets) ? event.markets : [])
+    .map(toMarketResult)
+    .filter((item): item is SearchMarketResult => item !== null);
+  const sortedMarkets = sortMarketsForEvent(markets);
+  const displayMarket = pickDisplayMarket(sortedMarkets);
+  if (!displayMarket) return null;
+
+  const tags = toSearchTags(event.tags);
+  const endDate = toStringOrUndefined(event.endDate);
+
+  return {
+    event: {
+      eventId,
+      eventTitle,
+      eventSlug,
+      image: toStringOrUndefined(event.image),
+      icon: toStringOrUndefined(event.icon),
+      tags,
+      primaryCategoryLine: buildCategoryLine(tags),
+      endsInText: formatEndsIn(endDate, now),
+      endDate,
+      liquidity: toFiniteNumber(event.liquidity),
+      volume: toFiniteNumber(event.volume),
+      volume24hr: toFiniteNumber(event.volume24hr),
+      status: deriveStatus(event),
+      displayMarket,
+    },
+    markets: sortedMarkets,
+  };
+};
+
+export const normalizeEventDetailResponse = (payload: unknown, now = new Date()): SearchEventDetail | null => {
+  if (!Array.isArray(payload)) return null;
+  const rawEvent = payload.find((item): item is GammaEvent => typeof item === "object" && item !== null);
+  if (!rawEvent) return null;
+  return normalizeEventRow(rawEvent, now);
+};
+
 export const buildSearchV2Url = (params: Omit<SearchV2Params, "signal">): URL => {
   const url = new URL("/search-v2", GAMMA_BASE_URL);
   url.searchParams.set("q", params.q);
@@ -304,36 +391,9 @@ export const normalizeSearchV2Response = (payload: unknown, now = new Date()): S
   const normalized: SearchEventRow[] = [];
 
   for (const event of events) {
-    const eventId = typeof event.id === "string" || typeof event.id === "number" ? String(event.id) : undefined;
-    const eventTitle = toStringOrUndefined(event.title);
-    const eventSlug = toStringOrUndefined(event.slug);
-    if (!eventId || !eventTitle || !eventSlug) continue;
-
-    const markets = (Array.isArray(event.markets) ? event.markets : [])
-      .map(toMarketResult)
-      .filter((item): item is SearchMarketResult => item !== null);
-    const displayMarket = pickDisplayMarket(markets);
-    if (!displayMarket) continue;
-
-    const tags = toSearchTags(event.tags);
-    const endDate = toStringOrUndefined(event.endDate);
-
-    normalized.push({
-      eventId,
-      eventTitle,
-      eventSlug,
-      image: toStringOrUndefined(event.image),
-      icon: toStringOrUndefined(event.icon),
-      tags,
-      primaryCategoryLine: buildCategoryLine(tags),
-      endsInText: formatEndsIn(endDate, now),
-      endDate,
-      liquidity: toFiniteNumber(event.liquidity),
-      volume: toFiniteNumber(event.volume),
-      volume24hr: toFiniteNumber(event.volume24hr),
-      status: deriveStatus(event),
-      displayMarket,
-    });
+    const detail = normalizeEventRow(event, now);
+    if (!detail) continue;
+    normalized.push(detail.event);
   }
 
   return {

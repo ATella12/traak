@@ -32,6 +32,10 @@ const eventRow = (overrides: Record<string, unknown> = {}) => ({
     question: "Will Barcelona win?",
     slug: "will-barcelona-win",
     conditionId: "0xcond",
+    outcomes: ["Yes", "No"],
+    outcomePrices: [0.395, 0.605],
+    active: true,
+    closed: false,
     probabilityYes: 0.395,
     groupItemTitle: "Barcelona",
   },
@@ -239,5 +243,29 @@ describe("GlobalMarketSearch", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain("page=2");
     expect(await screen.findByText("Page 2")).toBeInTheDocument();
+  });
+
+  it("navigates to event route when selecting a row", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue(
+      createResponse({
+        q: "barca",
+        page: 1,
+        stale: false,
+        hasMore: false,
+        results: [eventRow({ eventSlug: "multi-option-event" })],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<GlobalMarketSearch showHeader={false} />);
+    fireEvent.change(screen.getByPlaceholderText("Search all markets..."), { target: { value: "barca" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+    vi.useRealTimers();
+
+    fireEvent.click(await screen.findByText("Elche CF vs. RCD Espanyol de Barcelona"));
+    expect(pushMock).toHaveBeenCalledWith(expect.stringContaining("/portfolio/manual/event/multi-option-event"));
   });
 });

@@ -165,11 +165,11 @@ export default function GlobalMarketSearch({
 
   const handleSelect = (item: SearchEventRow) => {
     const params = new URLSearchParams({
-      q: item.displayMarket.question,
+      q: item.eventTitle,
       cat: item.primaryCategoryLine || "Other",
-      mid: item.displayMarket.marketId,
+      eid: item.eventId,
     });
-    router.push(`/portfolio/manual/all/${item.displayMarket.slug}?${params.toString()}`);
+    router.push(`/portfolio/manual/event/${item.eventSlug}?${params.toString()}`);
   };
 
   return (
