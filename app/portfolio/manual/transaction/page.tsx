@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -22,7 +23,7 @@ const formatProbability = (probability?: number): string => {
   return `${Math.round(Math.max(0, Math.min(1, probability)) * 100)}%`;
 };
 
-export default function TransactionFormScreen() {
+function TransactionFormScreenContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -186,5 +187,22 @@ export default function TransactionFormScreen() {
         ) : null}
       </section>
     </main>
+  );
+}
+
+export default function TransactionFormScreen() {
+  return (
+    <Suspense
+      fallback={
+        <main className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6 lg:px-8">
+          <section className="rounded-3xl border border-slate-800 bg-slate-950/80 p-6 shadow-2xl shadow-black/30 sm:p-8">
+            <h1 className="text-2xl font-semibold text-slate-50">Add Transaction</h1>
+            <p className="mt-3 text-sm text-slate-400">Loading market details...</p>
+          </section>
+        </main>
+      }
+    >
+      <TransactionFormScreenContent />
+    </Suspense>
   );
 }

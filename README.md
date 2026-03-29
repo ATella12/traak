@@ -11,7 +11,7 @@ Portfolio data is persisted through Prisma-backed API routes instead of relying 
 - Disconnecting a wallet removes only that wallet's imported records.
 - Existing browser-stored portfolio data is migrated to the backend on first load when the API is available.
 
-For production, set `DATABASE_URL` to your deployed database. The current Prisma schema uses SQLite for local development.
+For production, set `DATABASE_URL` to a hosted PostgreSQL database. SQLite is not suitable for Vercel serverless production persistence.
 
 ## Local setup
 
@@ -27,11 +27,11 @@ npm install
 cp .env.example .env
 ```
 
-3. Generate Prisma client and create the database schema:
+3. Generate Prisma client and run migrations:
 
 ```bash
 npm run prisma:generate
-npx prisma db push
+npx prisma migrate dev
 ```
 
 4. Run app:
@@ -66,3 +66,25 @@ This indexes Polymarket markets into local SQLite for local data workflows.
 ## Dev-only sync endpoint
 
 `POST /api/dev/sync-markets` works only when `NODE_ENV !== "production"` and `DEV_ADMIN_TOKEN` is set.
+
+## Vercel deployment
+
+Required environment variables:
+
+- `DATABASE_URL`
+- `ADMIN_TOKEN`
+- `DEV_ADMIN_TOKEN` if you want the dev-only sync path outside production-like local environments
+
+Recommended Vercel build command:
+
+```bash
+npm run vercel-build
+```
+
+This runs:
+
+1. `prisma generate`
+2. `prisma migrate deploy`
+3. `next build`
+
+Before deploying, make sure Prisma migrations exist in `prisma/migrations` and that `DATABASE_URL` points to a reachable PostgreSQL database.
