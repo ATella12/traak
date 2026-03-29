@@ -34,6 +34,9 @@ export type SearchMarketResult = {
   liquidityNum?: number;
   volume24hr?: number;
   probabilityYes?: number;
+  lastTradePrice?: number;
+  acceptingOrders?: boolean;
+  umaResolutionStatus?: string;
 };
 
 export type SearchEventRow = {
@@ -96,6 +99,9 @@ type GammaMarket = {
   outcomePrices?: string | number[];
   bestBid?: number | string;
   bestAsk?: number | string;
+  lastTradePrice?: number | string;
+  acceptingOrders?: boolean;
+  umaResolutionStatus?: string;
 };
 
 type GammaEvent = {
@@ -222,6 +228,9 @@ const toMarketResult = (market: GammaMarket): SearchMarketResult | null => {
     endDate: toStringOrUndefined(market.endDate),
     bestBid: toFiniteNumber(market.bestBid),
     bestAsk: toFiniteNumber(market.bestAsk),
+    lastTradePrice: toFiniteNumber(market.lastTradePrice),
+    acceptingOrders: coerceBoolean(market.acceptingOrders, false),
+    umaResolutionStatus: toStringOrUndefined(market.umaResolutionStatus),
     volumeNum: toFiniteNumber(market.volumeNum ?? market.volume),
     liquidityNum: toFiniteNumber(market.liquidityNum ?? market.liquidity),
     volume24hr: toFiniteNumber(market.volume24hr),

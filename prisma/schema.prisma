@@ -1,0 +1,91 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Market {
+  id        String   @id
+  slug      String   @unique
+  question  String
+  category  String   @default("Other")
+  raw       Json?
+  updatedAt DateTime @updatedAt
+
+  @@index([question])
+  @@index([slug])
+}
+
+model PortfolioOwner {
+  id              String                @id @default(cuid())
+  ownerKey        String                @unique
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  transactions    PortfolioTransaction[]
+  connectedWallets ConnectedWallet[]
+  walletSyncs     WalletSync[]
+}
+
+model PortfolioTransaction {
+  id                     String         @id
+  ownerId                String
+  owner                  PortfolioOwner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  sourceType             String
+  sourceId               String
+  walletAddress          String?
+  connectedWalletAddress String?
+  proxyWallet            String?
+  marketId               String
+  marketTitle            String
+  category               String?
+  side                   String
+  outcome                String
+  shares                 Float
+  price                  Float
+  fee                    Float?
+  timestamp              DateTime
+  createdAt              DateTime
+  updatedAt              DateTime
+  notes                  String?
+  externalTradeId        String?
+  importKey              String?
+  rawSource              Json?
+
+  @@index([ownerId])
+  @@index([ownerId, sourceType, sourceId])
+  @@index([ownerId, marketId])
+  @@unique([ownerId, importKey])
+}
+
+model ConnectedWallet {
+  id               String         @id @default(cuid())
+  ownerId          String
+  owner            PortfolioOwner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  connectedAddress String
+  proxyWallet      String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@unique([ownerId, connectedAddress])
+  @@index([ownerId])
+}
+
+model WalletSync {
+  id                     String         @id @default(cuid())
+  ownerId                String
+  owner                  PortfolioOwner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  connectedWalletAddress String
+  polymarketProxyWallet  String?
+  tradesFound            Int
+  tradesImported         Int
+  duplicatesSkipped      Int
+  lastSyncedAt           DateTime
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+
+  @@unique([ownerId, connectedWalletAddress])
+  @@index([ownerId])
+}

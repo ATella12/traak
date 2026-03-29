@@ -2,6 +2,17 @@
 
 Prediction market portfolio tracker built with Next.js App Router + TypeScript + Tailwind.
 
+## Portfolio persistence
+
+Portfolio data is persisted through Prisma-backed API routes instead of relying on browser-only localStorage.
+
+- Manual transactions are saved in the database until explicitly deleted.
+- Wallet imports are saved in the database and tied to the connected wallet address.
+- Disconnecting a wallet removes only that wallet's imported records.
+- Existing browser-stored portfolio data is migrated to the backend on first load when the API is available.
+
+For production, set `DATABASE_URL` to your deployed database. The current Prisma schema uses SQLite for local development.
+
 ## Local setup
 
 1. Install dependencies:
@@ -16,7 +27,7 @@ npm install
 cp .env.example .env
 ```
 
-3. Generate Prisma client and create SQLite schema:
+3. Generate Prisma client and create the database schema:
 
 ```bash
 npm run prisma:generate

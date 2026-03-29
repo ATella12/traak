@@ -1,21 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 
+import { fromCategorySlug, getMarketByCategoryAndSlug } from "@/src/data/markets.seed";
 import { addTransaction } from "@/src/lib/storage";
-import type { SearchEventRow } from "@/src/lib/gammaSearch";
 
 type Side = "BUY" | "SELL";
 type Outcome = "YES" | "NO";
-
-type SearchResponse = {
-  q: string;
-  stale: boolean;
-  error?: string;
-  results: SearchEventRow[];
-};
 
 const getDefaultDateTimeLocal = (): string => {
   const now = new Date();
@@ -23,23 +16,14 @@ const getDefaultDateTimeLocal = (): string => {
   return localDate.toISOString().slice(0, 16);
 };
 
-const normalizeQueryText = (value: string): string => value.replace(/[-_]+/g, " ").trim();
-
-export default function AddTransactionFromGlobalPage() {
+export default function AddTransactionPage() {
   const router = useRouter();
-  const params = useParams<{ slug: string }>();
-  const searchParams = useSearchParams();
-
-  const slug = params.slug;
-  const queryQuestion = (searchParams.get("q") ?? "").trim();
-  const queryCategory = (searchParams.get("cat") ?? "").trim();
-  const queryMarketId = (searchParams.get("mid") ?? "").trim();
-
-  const [question, setQuestion] = useState(queryQuestion || normalizeQueryText(slug));
-  const [category, setCategory] = useState(queryCategory || "Other");
-  const [resolvedMarketId, setResolvedMarketId] = useState(queryMarketId || "");
-  const [marketDetailsWarning, setMarketDetailsWarning] = useState<string | null>(null);
-  const [resolving, setResolving] = useState(false);
+  const params = useParams<{ category: string; slug: string }>();
+  const category = fromCategorySlug(params.category);
+  const market = useMemo(
+    () => (category ? getMarketByCategoryAndSlug(category, params.slug) : undefined),
+    [category, params.slug],
+  );
 
   const [side, setSide] = useState<Side>("BUY");
   const [outcome, setOutcome] = useState<Outcome>("YES");
@@ -50,47 +34,22 @@ export default function AddTransactionFromGlobalPage() {
   const [notes, setNotes] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
 
-  const needsLookup = useMemo(() => !queryQuestion || !queryCategory, [queryCategory, queryQuestion]);
-
-  useEffect(() => {
-    if (!needsLookup) return;
-
-    let isCancelled = false;
-    const run = async () => {
-      setResolving(true);
-      try {
-        const lookupQuery = queryQuestion || normalizeQueryText(slug);
-        const response = await fetch(`/api/markets/search?q=${encodeURIComponent(lookupQuery)}&limit_per_type=20`);
-        const data = (await response.json()) as SearchResponse;
-        if (isCancelled) return;
-
-        const exact = data.results.find((item) => item.displayMarket.slug === slug);
-        const first = exact ?? data.results[0];
-
-        if (first) {
-          setQuestion(first.displayMarket.question);
-          setCategory(first.primaryCategoryLine || first.eventTitle || "Other");
-          setResolvedMarketId(first.displayMarket.marketId || queryMarketId);
-          setMarketDetailsWarning(null);
-        } else {
-          setCategory((current) => current || "Other");
-          setMarketDetailsWarning("Market details unavailable. You can still add a transaction and edit the market fields.");
-        }
-      } catch {
-        if (isCancelled) return;
-        setCategory((current) => current || "Other");
-        setMarketDetailsWarning("Live lookup is unavailable. You can still add a transaction manually.");
-      } finally {
-        if (!isCancelled) setResolving(false);
-      }
-    };
-
-    void run();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [needsLookup, queryMarketId, queryQuestion, slug]);
+  if (!category || !market) {
+    return (
+      <main className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6 lg:px-8">
+        <section className="rounded-3xl border border-slate-800 bg-slate-950/80 p-6 sm:p-8">
+          <h1 className="text-2xl font-semibold text-slate-50">Market not found</h1>
+          <p className="mt-2 text-sm text-slate-400">The selected market could not be found in this category.</p>
+          <Link
+            href="/portfolio/manual"
+            className="mt-6 inline-flex rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:bg-slate-900"
+          >
+            Back to categories
+          </Link>
+        </section>
+      </main>
+    );
+  }
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -100,12 +59,6 @@ export default function AddTransactionFromGlobalPage() {
     const parsedPrice = Number(price);
     const parsedFee = Number(fee);
     const parsedDate = new Date(dateTime);
-    const cleanedQuestion = question.trim();
-    const cleanedCategory = category.trim() || "Other";
-
-    if (!cleanedQuestion) {
-      nextErrors.push("Market question is required.");
-    }
 
     if (!Number.isFinite(parsedShares) || parsedShares <= 0) {
       nextErrors.push("Shares must be greater than 0.");
@@ -130,9 +83,9 @@ export default function AddTransactionFromGlobalPage() {
 
     addTransaction({
       source: "manual",
-      marketId: resolvedMarketId || slug,
-      marketTitle: cleanedQuestion,
-      category: cleanedCategory,
+      marketId: market.slug,
+      marketTitle: market.question,
+      category: market.category,
       side,
       outcome,
       shares: parsedShares,
@@ -148,42 +101,10 @@ export default function AddTransactionFromGlobalPage() {
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6 lg:px-8">
       <section className="rounded-3xl border border-slate-800 bg-slate-950/80 p-6 shadow-2xl shadow-black/30 sm:p-8">
-        <p className="text-xs uppercase tracking-wide text-slate-400">{category || "Other"}</p>
-        <h1 className="mt-2 text-xl font-semibold leading-tight text-slate-50">{question || "Add transaction"}</h1>
-
-        {resolvedMarketId ? <p className="mt-1 text-xs text-slate-500">Market resolved from live search.</p> : null}
-        {resolving ? <p className="mt-2 text-sm text-slate-400">Loading market details...</p> : null}
-        {marketDetailsWarning ? (
-          <p className="mt-2 rounded-lg border border-amber-600/40 bg-amber-900/20 px-3 py-2 text-sm text-amber-200">
-            {marketDetailsWarning}
-          </p>
-        ) : null}
+        <p className="text-xs uppercase tracking-wide text-slate-400">{category}</p>
+        <h1 className="mt-2 text-xl font-semibold leading-tight text-slate-50">{market.question}</h1>
 
         <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label className="text-sm text-slate-300 sm:col-span-2">
-              Market question
-              <input
-                type="text"
-                value={question}
-                onChange={(event) => setQuestion(event.target.value)}
-                className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-900/70 px-4 py-3 text-slate-100 outline-none focus:border-cyan-500"
-                placeholder="Enter market question"
-              />
-            </label>
-
-            <label className="text-sm text-slate-300 sm:col-span-2">
-              Category
-              <input
-                type="text"
-                value={category}
-                onChange={(event) => setCategory(event.target.value)}
-                className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-900/70 px-4 py-3 text-slate-100 outline-none focus:border-cyan-500"
-                placeholder="Other"
-              />
-            </label>
-          </div>
-
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <p className="mb-2 text-sm text-slate-300">Side</p>
@@ -315,7 +236,7 @@ export default function AddTransactionFromGlobalPage() {
               Add Transaction
             </button>
             <Link
-              href="/portfolio/manual"
+              href={`/portfolio/manual/${params.category}`}
               className="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:bg-slate-900"
             >
               Back
