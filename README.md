@@ -78,13 +78,17 @@ Required environment variables:
 Recommended Vercel build command:
 
 ```bash
-npm run vercel-build
+npm run build
 ```
 
-This runs:
+Recommended Vercel install command:
 
-1. `prisma generate`
-2. `prisma migrate deploy`
-3. `next build`
+```bash
+npm install
+```
 
-Before deploying, make sure Prisma migrations exist in `prisma/migrations` and that `DATABASE_URL` points to a reachable PostgreSQL database.
+`postinstall` already runs `prisma generate`, so the Prisma client is available during the build without adding extra Vercel steps.
+
+Do not run `prisma migrate deploy` as part of the Vercel build. Run database migrations separately in a controlled step, then deploy the app build.
+
+Vercel root directory should be the repository root (`.`), where `package.json` and `next.config.ts` live.
